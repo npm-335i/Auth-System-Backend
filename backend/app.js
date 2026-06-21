@@ -49,12 +49,15 @@ app.get("/api/health", (req, res) => {
     3: "disconnecting",
   };
 
+  const status = statusMap[mongoStatus] || "unknown";
+  
   res.status(200).json({
     status: "healthy",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || "development",
-    mongodb: statusMap[mongoStatus] || "unknown",
+    mongodb: status,
     mongodb_uri_set: !!process.env.MONGODB_URI,
+    ready_state: mongoStatus,
   });
 });
 
@@ -96,18 +99,18 @@ app.use((err, req, res, next) => {
   });
 });
 
-const connectDB = async () => {
+// Improved MongoDB connection with retry logic
+const connectDB = async (retries = 5) => {
   try {
     const mongoURI = process.env.MONGODB_URI;
     
     if (!mongoURI) {
-      console.error("MONGODB_URI is not defined in environment variables");
+      console.error("❌ MONGODB_URI is not defined in environment variables");
       return;
     }
 
-    console.log("Attempting to connect to MongoDB...");
-    console.log("MONGODB_URI exists:", true);
-    console.log("URI length:", mongoURI.length);
+    console.log("🔗 Attempting to connect to MongoDB...");
+    console.log(`📊 Retries remaining: ${retries}`);
 
     await mongoose.connect(mongoURI, {
       useNewUrlParser: true,
@@ -116,63 +119,73 @@ const connectDB = async () => {
       serverSelectionTimeoutMS: 30000,
       socketTimeoutMS: 45000,
       family: 4,
+      connectTimeoutMS: 30000,
     });
 
-    console.log("Connected to MongoDB successfully");
-    console.log("Database name:", mongoose.connection.db?.databaseName || "unknown");
-    console.log("Connection state:", mongoose.connection.readyState);
+    console.log("✅ Connected to MongoDB successfully");
+    console.log("📊 Database name:", mongoose.connection.db?.databaseName || "unknown");
+    console.log("📊 Connection state:", mongoose.connection.readyState);
 
     mongoose.connection.on("error", (err) => {
-      console.error("MongoDB connection error:", err);
+      console.error("❌ MongoDB connection error:", err);
     });
 
     mongoose.connection.on("disconnected", () => {
-      console.log("MongoDB disconnected");
+      console.log("⚠️ MongoDB disconnected");
     });
 
     mongoose.connection.on("reconnected", () => {
-      console.log("MongoDB reconnected");
+      console.log("✅ MongoDB reconnected");
     });
 
+    return true;
+
   } catch (error) {
-    console.error("MongoDB connection error:");
-    console.error("Error name:", error.name);
-    console.error("Error message:", error.message);
-    console.error("Error code:", error.code);
+    console.error("❌ MongoDB connection error:");
+    console.error("📊 Error name:", error.name);
+    console.error("📊 Error message:", error.message);
+    console.error("📊 Error code:", error.code);
 
     if (error.name === "MongoServerError" && error.code === 8000) {
-      console.error("Authentication failed. Check username and password.");
+      console.error("🔒 Authentication failed. Check username and password.");
+    } else if (error.name === "MongoNetworkError") {
+      console.error("🌐 Network error. Check if MongoDB is reachable.");
+    } else if (error.code === "ECONNREFUSED") {
+      console.error("🚫 Connection refused. Check MongoDB URI.");
     }
 
-    if (error.name === "MongoNetworkError") {
-      console.error("Network error. Check if MongoDB is reachable.");
-    }
-
-    if (process.env.NODE_ENV !== "production") {
-      process.exit(1);
+    // Retry logic
+    if (retries > 1) {
+      console.log(`🔄 Retrying in 5 seconds... (${retries - 1} retries left)`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      return connectDB(retries - 1);
+    } else {
+      console.error("❌ All connection attempts failed.");
+      return false;
     }
   }
 };
 
-connectDB();
+// Start connection immediately
+connectDB(5);
 
 module.exports = app;
 
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📊 Environment: ${process.env.NODE_ENV || "development"}`);
   });
 }
 
 process.on("SIGINT", async () => {
   await mongoose.connection.close();
-  console.log("\nMongoDB connection closed");
+  console.log("\n👋 MongoDB connection closed");
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
   await mongoose.connection.close();
-  console.log("\nMongoDB connection closed");
+  console.log("\n👋 MongoDB connection closed");
   process.exit(0);
 });
