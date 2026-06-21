@@ -9,6 +9,17 @@ const authRoutes = require("./routes/authRoutes");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+  credentials: true,
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -20,30 +31,38 @@ app.use(
         imgSrc: ["'self'", "data:", "https:"],
       },
     },
-  }),
+  })
 );
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser(process.env.COOKIE_SECRET || "default-secret-key"));
 
-app.use(cors());
 
 app.use("/api/auth", authRoutes);
 
+
 app.get("/api/health", (req, res) => {
+  const mongoStatus = mongoose.connection.readyState;
+  const statusMap = {
+    0: "disconnected",
+    1: "connected",
+    2: "connecting",
+    3: "disconnecting",
+  };
+
   res.status(200).json({
     status: "healthy",
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
-    mongodb:
-      mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    environment: process.env.NODE_ENV || "development",
+    mongodb: statusMap[mongoStatus] || "unknown",
   });
 });
 
+
 app.get("/", (req, res) => {
   res.json({
-    message: "API is running",
+    message: "Auth API is running",
     version: "1.0.0",
     endpoints: {
       auth: "/api/auth",
@@ -51,6 +70,7 @@ app.get("/", (req, res) => {
     },
   });
 });
+
 
 app.use((err, req, res, next) => {
   console.error("Unhandled error:", err);
@@ -72,12 +92,13 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({
     error: "Internal server error",
     message:
-      process.env.NODE_ENV === "development"
-        ? err.message
-        : "Something went wrong",
-    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
+      process.env.NODE_ENV === "production"
+        ? "Something went wrong"
+        : err.message,
+    ...(process.env.NODE_ENV !== "production" && { stack: err.stack }),
   });
 });
+
 
 const connectDB = async () => {
   try {
@@ -111,18 +132,20 @@ const connectDB = async () => {
   }
 };
 
-if (process.env.NODE_ENV === "production") {
-  connectDB();
-} else {
-  connectDB().then(() => {
-    app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-      console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
-    });
+
+connectDB();
+
+
+module.exports = app;
+
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
   });
 }
 
-module.exports = app;
 
 process.on("SIGINT", async () => {
   await mongoose.connection.close();
